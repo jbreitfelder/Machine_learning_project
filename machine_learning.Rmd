@@ -1,0 +1,204 @@
+---
+output: html_document
+---
+# Predicting a physical activity type from accelerometer measurements.
+# *By Joanne Breitfelder*
+
+---
+
+## Introduction
+
+Using devices such as *Jawbone Up*, *Nike FuelBand* and *Fitbit*, it is now possible to collect a large amount of data about personal activity, and relatively inexpensively. These devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or just because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+In this project, we will use the measurements given by accelerometers on the belt, forearm, arm, and dumbell of the participants to predict the class of the activity they were doing. 
+
+More information is available [here](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset). 
+
+---
+
+## Reference
+
+*Qualitative Activity Recognition of Weight Lifting Exercises*
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W. and Fuks, H.
+Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) 
+Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz405DthvvN
+
+---
+
+## Pre-processing
+
+### 1. Loading packages and setting the seed for reproducibility :
+
+```{r, message=FALSE}
+library(dplyr); library(ggplot2); library(knitr); library(caret); library(tidyr)
+set.seed(123)
+```
+
+---
+
+### 2. Loading and creating the training, testing and validating datasets
+
+We will create a validating set by partitioning the training set. In particular, this set will allow us to calculate the out-of-sample error rate.
+
+```{r, cache=TRUE}
+if (!file.exists("training_data") | !file.exists("testing_data")) {
+        url_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+        url_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+        download.file(url_train, destfile="training_data", method="curl")
+        download.file(url_test, destfile="testing_data", method="curl")}
+
+train_big <- read.csv("training_data", na.strings=c("NA", "", "#DIV/0!"))
+test <- read.csv("testing_data", na.strings=c("NA", "", "#DIV/0!"))
+
+########## CREATING A VALIDATION SET ########## 
+train <- train_big[createDataPartition(y=train_big$classe, p=0.6, list=FALSE), ]
+validation <- train_big[-createDataPartition(y=train_big$classe, p=0.6, list=FALSE), ]
+```
+
+Dimensions of the resulting tables :
+
+```{r, echo=FALSE}
+########## DIMENSIONS OF THE RESULTING DATASETS ##########
+dim <- sapply(list(train, validation, test), dim)
+dim <- data.frame(train=dim[,1], validation=dim[,2], test=dim[,3])
+row.names(dim) <- c("observations", "variables")
+dim
+```
+
+---
+
+### 3. Predictors selection
+
+The data processing is done in the exact same way on the three datasets.
+
+#### Removing the near-zero variables :
+
+We first remove all the variables with only zero values or with a very small variance. Indeed, they are not giving a very constraining information for the learning algorithm.
+
+```{r, cache=TRUE}
+nzv <- nearZeroVar(train)
+train <- train[, -nzv] 
+test <- test[, -nzv] 
+validation <- validation[, -nzv] 
+```
+
+#### Removing the factor variables : 
+
+The dataset is composed of 3 factor variables. These variables are not well handled by machine learning, and dummy variables can be tricky to use too. *classe* is our outcome, so we won't consider it for the moment. *cvtd_timestamp* and *user_name* are not correlated with our outcome, so we will simply remove them.
+
+```{r, cache=TRUE}
+train <- select(train, -c(cvtd_timestamp, user_name))
+test <- select(test, -c(cvtd_timestamp, user_name))
+validation <- select(validation, -c(cvtd_timestamp, user_name))
+```
+
+#### Removing other irrelevant features :
+
+*X*, *raw_timestamp_part_1*, *raw_timestamp_part_2* and *num_window* are not relevant, because not physically correlated with the outcome. In fact, the variable *X* is unphysically but highly correlated to the outcome, what could even introduce a strong biais in the results.
+
+```{r, cache=TRUE}
+train <- select(train, -c(X, raw_timestamp_part_1:num_window))
+test <- select(test, -c(X, raw_timestamp_part_1:num_window))
+validation <- select(validation, -c(X, raw_timestamp_part_1:num_window))
+```
+
+#### Removing the features with mostly missing data :
+
+* 60 variables have 0 missing values
+* 100 variables have more than 97% of NAs!
+
+Removing these variables does not reduce significantly the accuracy. In this case, it seems to be a better option than imputing missing values.
+
+```{r, cache=TRUE}
+no_NAs <- sapply(train, function(x) sum(!is.na(x))) > 11775
+train <- train[no_NAs] 
+test <- test[no_NAs] 
+validation <- validation[no_NAs] 
+```
+
+These simple steps allowed us to divide by 3 the number of predictors. 
+
+```{r, echo=FALSE}
+dim <- sapply(list(train, validation, test), dim)
+dim <- data.frame(train=dim[,1], validation=dim[,2], test=dim[,3])
+row.names(dim) <- c("observations", "variables")
+dim
+```
+
+---
+
+## Model fitting and validation
+
+### 1. Fitting of a random forest model
+
+We fit the data with a random forest model. The cross-validation is done by a 5-fold algorithm.
+
+```{r, cache=TRUE, message=FALSE}
+train_control <- trainControl(method="cv", number=5) 
+modelFit_rf <- train(train$classe ~ .,                      
+                     data=train, 
+                     method="rf",
+                     preProcess=c("center", "scale"), 
+                     trControl=train_control)
+```
+
+Main characteristics of the model :
+
+```{r, message=FALSE}
+modelFit_rf
+```
+
+```{r, echo=FALSE, eval=FALSE, message=FALSE}
+contrib <- add_rownames(varImp(modelFit_rf, scale=FALSE)$importance, "Variable")
+contrib <- mutate(contrib, as.factor(Variable))
+contrib <- filter(contrib, contrib$Overall > quantile(contrib$Overall, 0.80))
+
+ggplot(contrib, aes(x=reorder(Variable, Overall), y=Overall)) + 
+        geom_bar(aes(fill=reorder(Variable, -Overall)), alpha=0.5, stat="identity") +
+        coord_flip() +
+        ylab("Overall contribution") + 
+        xlab("Variable") +
+        scale_x_discrete("","") +
+        guides(fill=guide_legend(title="Variable")) +
+        ggtitle("Contributions of the variables explaining 80% of the variance") 
+```
+
+---
+
+### 2. Validation of the result
+
+The results are validated on the validation dataset. The confusion matrix describes the performance of the random forest model, by comparing the prediction of the algorithm with true data. We get a very good accuracy of 99.71% !
+
+```{r, message=FALSE}
+confusionMatrix(validation$classe, predict(modelFit_rf, validation))
+```
+
+Now let's calculate the out-of-sample error :
+
+```{r}
+sum(predict(modelFit_rf, validation) != validation$classe)/length(validation$classe)
+```
+
+---
+
+## Predictions on test cases
+
+The test dataset has no *classe* variable, but we can predict it thanks to our algorithm :
+
+```{r}
+########## PREDICTION ON TEST CASES ##########
+predict(modelFit_rf, test)
+```
+
+---
+
+## Appendix
+
+```{r}
+sessionInfo()
+```
