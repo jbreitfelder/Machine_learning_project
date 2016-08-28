@@ -143,6 +143,7 @@ train_control <- trainControl(method="cv", number=5)
 modelFit_rf <- train(train$classe ~ .,                      
                      data=train, 
                      method="rf",
+                     metric="RMSE", maximize=FALSE
                      preProcess=c("center", "scale"), 
                      trControl=train_control)
 ```
